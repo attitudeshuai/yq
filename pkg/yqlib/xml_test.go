@@ -4,6 +4,7 @@ package yqlib
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -627,6 +628,137 @@ var xmlScenarios = []formatScenario{
 		expected:       expectedXmlWithProcInstAndDirectives,
 		scenarioType:   "roundtrip",
 	},
+	{
+		description:  "CDATA is escaped when cdata preservation is off",
+		skipDoc:      true,
+		input:        "<root>\n  <note><![CDATA[<x>]]></note>\n</root>",
+		expected:     "<root>\n  <note>&lt;x&gt;</note>\n</root>\n",
+		scenarioType: "roundtrip",
+	},
+	{
+		description:  "Keep CDATA: pure cdata element round trips verbatim",
+		skipDoc:      true,
+		input:        "<root>\n  <note><![CDATA[<hello & world>]]></note>\n</root>",
+		expected:     "<root>\n  <note><![CDATA[<hello & world>]]></note>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: plain text is not upgraded to cdata",
+		skipDoc:      true,
+		input:        "<cat>x &amp; y</cat>",
+		expected:     "<cat>x &amp; y</cat>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: mixed text and cdata segments keep order and form",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y&<z]]>w</a>\n</root>",
+		expected:     "<root>\n  <a>x<![CDATA[y&<z]]>w</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: adjacent cdata sections stay separate",
+		skipDoc:      true,
+		input:        "<root>\n  <a><![CDATA[x]]><![CDATA[y]]></a>\n</root>",
+		expected:     "<root>\n  <a><![CDATA[x]]><![CDATA[y]]></a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: cdata in an element with attributes",
+		skipDoc:      true,
+		input:        `<cat legs="4"><![CDATA[meow & <x>]]></cat>`,
+		expected:     `<cat legs="4"><![CDATA[meow & <x>]]></cat>` + "\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: cdata section containing nested cdata marker text",
+		skipDoc:      true,
+		input:        "<root><a><![CDATA[<![CDATA[x]]]]><![CDATA[>]]></a></root>",
+		expected:     "<root>\n  <a><![CDATA[<![CDATA[x]]]]><![CDATA[>]]></a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: comment between segments",
+		skipDoc:      true,
+		input:        "<root><a>x<!-- c --><![CDATA[y]]>z</a></root>",
+		expected:     "<root>\n  <a><!-- c -->x<![CDATA[y]]>z</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: repeated sibling elements are still repeated elements",
+		skipDoc:      true,
+		input:        "<root><a><![CDATA[x]]></a><a><![CDATA[y]]></a></root>",
+		expected:     "<root>\n  <a><![CDATA[x]]></a>\n  <a><![CDATA[y]]></a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: works with the standard (non raw) token method",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y&<z]]>w</a>\n</root>",
+		expected:     "<root>\n  <a>x<![CDATA[y&<z]]>w</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata-no-raw-token",
+	},
+	{
+		description:  "Keep CDATA: decode to yaml leaves only text values",
+		skipDoc:      true,
+		input:        "<root>\n  <note><![CDATA[x&<]]></note>\n</root>",
+		expected:     "root:\n    note: x&<\n",
+		scenarioType: "decode-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: decode mixed segments to yaml leaves only text values",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y&<z]]>w</a>\n</root>",
+		expected:     "root:\n    a:\n        - x\n        - y&<z\n        - w\n",
+		scenarioType: "decode-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: decode to json leaves only text values",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y&<z]]>w</a>\n</root>",
+		expected:     "{\n  \"root\": {\n    \"a\": [\n      \"x\",\n      \"y&<z\",\n      \"w\"\n    ]\n  }\n}\n",
+		scenarioType: "decode-keep-cdata-json",
+	},
+	{
+		description:  "Keep CDATA: rewritten cdata element falls back to escaped text",
+		skipDoc:      true,
+		input:        "<root>\n  <a><![CDATA[x&<y]]></a>\n</root>",
+		expression:   `.root.a = "new&<v>"`,
+		expected:     "<root>\n  <a>new&amp;&lt;v&gt;</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: rewritten segment falls back, untouched segments keep form",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y]]>z</a>\n</root>",
+		expression:   `.root.a[1] = "Y&>"`,
+		expected:     "<root>\n  <a>xY&amp;&gt;z</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: merging segments into a scalar falls back to escaped text",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y]]>z</a>\n</root>",
+		expression:   `.root.a = (.root.a | join(","))`,
+		expected:     "<root>\n  <a>x,y,z</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: json round trip drops the form and escapes text",
+		skipDoc:      true,
+		input:        "<root>\n  <a><![CDATA[x&<y]]></a>\n</root>",
+		expression:   `.root |= (to_json | from_json)`,
+		expected:     "<root>\n  <a>x&amp;&lt;y</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
+	{
+		description:  "Keep CDATA: appended segment is plain text",
+		skipDoc:      true,
+		input:        "<root>\n  <a>x<![CDATA[y]]>z</a>\n</root>",
+		expression:   `.root.a += "q"`,
+		expected:     "<root>\n  <a>x<![CDATA[y]]>zq</a>\n</root>\n",
+		scenarioType: "roundtrip-keep-cdata",
+	},
 }
 
 func testXMLScenario(t *testing.T, s formatScenario) {
@@ -639,6 +771,21 @@ func testXMLScenario(t *testing.T, s formatScenario) {
 		test.AssertResultWithContext(t, s.expected, mustProcessFormatScenario(s, NewYamlDecoder(ConfiguredYamlPreferences), NewXMLEncoder(ConfiguredXMLPreferences)), s.description)
 	case "roundtrip":
 		test.AssertResultWithContext(t, s.expected, mustProcessFormatScenario(s, NewXMLDecoder(ConfiguredXMLPreferences), NewXMLEncoder(ConfiguredXMLPreferences)), s.description)
+	case "roundtrip-keep-cdata":
+		prefs := keepCDataXmlPrefs()
+		test.AssertResultWithContext(t, s.expected, mustProcessFormatScenario(s, NewXMLDecoder(prefs), NewXMLEncoder(prefs)), s.description)
+	case "roundtrip-keep-cdata-no-raw-token":
+		prefs := keepCDataXmlPrefs()
+		prefs.UseRawToken = false
+		test.AssertResultWithContext(t, s.expected, mustProcessFormatScenario(s, NewXMLDecoder(prefs), NewXMLEncoder(prefs)), s.description)
+	case "decode-keep-cdata":
+		prefs := keepCDataXmlPrefs()
+		yamlPrefs := ConfiguredYamlPreferences.Copy()
+		yamlPrefs.Indent = 4
+		test.AssertResultWithContext(t, s.expected, mustProcessFormatScenario(s, NewXMLDecoder(prefs), NewYamlEncoder(yamlPrefs)), s.description)
+	case "decode-keep-cdata-json":
+		prefs := keepCDataXmlPrefs()
+		test.AssertResultWithContext(t, s.expected, mustProcessFormatScenario(s, NewXMLDecoder(prefs), NewJSONEncoder(ConfiguredJSONPreferences)), s.description)
 	case "decode-keep-ns":
 		prefs := NewDefaultXmlPreferences()
 		prefs.KeepNamespace = true
@@ -838,4 +985,52 @@ func TestXMLScenarios(t *testing.T) {
 		genericScenarios[i] = s
 	}
 	documentScenarios(t, "usage", "xml", genericScenarios, documentXMLScenario)
+}
+
+func keepCDataXmlPrefs() XmlPreferences {
+	prefs := NewDefaultXmlPreferences()
+	prefs.KeepCData = true
+	return prefs
+}
+
+func TestScanXMLChardataForms(t *testing.T) {
+	scenarios := []struct {
+		input    string
+		expected []bool
+	}{
+		{"<a>x<![CDATA[y]]>z</a>", []bool{false, true, false}},
+		{"\n<a/>", []bool{false}},
+		{`<?xml version="1.0"?><!-- c --><!DOCTYPE x [<!ELEMENT a EMPTY>]><a><![CDATA[q]]></a>`, []bool{true}},
+		{`<a x="<![CDATA[">t</a>`, []bool{false}},
+		{"<a><![CDATA[x]]><![CDATA[y]]></a>", []bool{true, true}},
+		{"<a>a &amp; b<![CDATA[c]]></a>", []bool{false, true}},
+		{"<a><![CDATA[]]></a>", []bool{true}},
+		{"<root><a>x</a><a><![CDATA[y]]></a></root>", []bool{false, true}},
+	}
+	for _, s := range scenarios {
+		actual := scanXMLChardataForms([]byte(s.input))
+		test.AssertResultComplexWithContext(t, fmt.Sprintf("%v", s.expected), fmt.Sprintf("%v", actual), s.input)
+	}
+}
+
+func TestXMLEncodeCDataIllegalSequence(t *testing.T) {
+	value := &CandidateNode{
+		Kind:        ScalarNode,
+		Tag:         "!!str",
+		Value:       "x]]>y",
+		SourceValue: "x]]>y",
+		Style:       CdataStyle,
+	}
+	key := createScalarNode("a", "a")
+	node := &CandidateNode{Kind: MappingNode, Tag: "!!map", Content: []*CandidateNode{key, value}}
+
+	var output bytes.Buffer
+	err := NewXMLEncoder(keepCDataXmlPrefs()).Encode(&output, node)
+	if err == nil {
+		t.Fatalf("expected an error for an illegal CDATA value, got: %v", output.String())
+	}
+	expected := `cannot encode CDATA section in element <a>, character data segment 1: value contains the illegal CDATA termination sequence "]]>" at position 1`
+	if err.Error() != expected {
+		t.Fatalf("expected [%v] but got [%v]", expected, err.Error())
+	}
 }

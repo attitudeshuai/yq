@@ -3,6 +3,7 @@
 package yqlib
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -19,6 +20,11 @@ type xmlDecoder struct {
 	readAnything bool
 	finished     bool
 	prefs        XmlPreferences
+	// chardataForms records, in document order, whether each
+	// encoding/xml CharData token came from a CDATA section (true) or
+	// plain text (false). Only populated when CDATA preservation is on.
+	chardataForms []bool
+	chardataIndex int
 }
 
 func NewXMLDecoder(prefs XmlPreferences) Decoder {
@@ -32,6 +38,8 @@ func (dec *xmlDecoder) Init(reader io.Reader) error {
 	dec.reader = reader
 	dec.readAnything = false
 	dec.finished = false
+	dec.chardataForms = nil
+	dec.chardataIndex = 0
 	return nil
 }
 
@@ -74,7 +82,7 @@ func (dec *xmlDecoder) createMap(n *xmlNode) (*CandidateNode, error) {
 		labelNode.HeadComment = dec.processComment(n.HeadComment)
 		labelNode.LineComment = dec.processComment(n.LineComment)
 		labelNode.FootComment = dec.processComment(n.FootComment)
-		yamlNode.AddKeyValueChild(labelNode, dec.createValueNodeFromData(n.Data))
+		yamlNode.AddKeyValueChild(labelNode, dec.createValueNodeFromData(n.Data, n.DataForms))
 	}
 
 	for i, keyValuePair := range n.Children {
@@ -125,22 +133,42 @@ func (dec *xmlDecoder) createMap(n *xmlNode) (*CandidateNode, error) {
 	return yamlNode, nil
 }
 
-func (dec *xmlDecoder) createValueNodeFromData(values []string) *CandidateNode {
+func (dec *xmlDecoder) createCharDataScalar(value string, isCData bool) *CandidateNode {
+	node := createScalarNode(value, value)
+	if isCData {
+		node.Style = CdataStyle
+		node.SourceValue = value
+	}
+	return node
+}
+
+func (dec *xmlDecoder) isCDataSegment(forms []bool, index int) bool {
+	return dec.prefs.KeepCData && index < len(forms) && forms[index]
+}
+
+func (dec *xmlDecoder) createValueNodeFromData(values []string, forms []bool) *CandidateNode {
 	switch len(values) {
 	case 0:
 		return createScalarNode(nil, "")
 	case 1:
-		return createScalarNode(values[0], values[0])
+		return dec.createCharDataScalar(values[0], dec.isCDataSegment(forms, 0))
 	default:
 		content := make([]*CandidateNode, 0)
-		for _, value := range values {
-			content = append(content, createScalarNode(value, value))
+		for i, value := range values {
+			content = append(content, dec.createCharDataScalar(value, dec.isCDataSegment(forms, i)))
 		}
-		return &CandidateNode{
+		seq := &CandidateNode{
 			Kind:    SequenceNode,
 			Tag:     "!!seq",
 			Content: content,
 		}
+		if dec.prefs.KeepCData {
+			// These are character data segments of a single element,
+			// not an array of repeated elements. Mark the sequence so
+			// the XML encoder writes them back in one element.
+			seq.Style = CdataStyle
+		}
+		return seq
 	}
 }
 
@@ -149,7 +177,7 @@ func (dec *xmlDecoder) convertToYamlNode(n *xmlNode) (*CandidateNode, error) {
 		return dec.createMap(n)
 	}
 
-	scalar := dec.createValueNodeFromData(n.Data)
+	scalar := dec.createValueNodeFromData(n.Data, n.DataForms)
 
 	log.Debugf("scalar (%v), headC: %v, lineC: %v, footC: %v", scalar.Tag, n.HeadComment, n.LineComment, n.FootComment)
 	scalar.HeadComment = dec.processComment(n.HeadComment)
@@ -197,6 +225,10 @@ type xmlNode struct {
 	FootComment string
 	LineComment string
 	Data        []string
+	// DataForms records, in parallel with Data, whether that character
+	// data segment came from a CDATA section (true) or plain text
+	// (false). Only populated when CDATA preservation is enabled.
+	DataForms []bool
 }
 
 type xmlChildrenKv struct {
@@ -232,11 +264,37 @@ type element struct {
 	state  string
 }
 
+// nextChardataForm returns the source form (true for a CDATA section,
+// false for plain text) of the next CharData token, consuming it so
+// the forms stay aligned with encoding/xml's token order.
+func (dec *xmlDecoder) nextChardataForm() bool {
+	if dec.chardataIndex >= len(dec.chardataForms) {
+		return false
+	}
+	form := dec.chardataForms[dec.chardataIndex]
+	dec.chardataIndex++
+	return form
+}
+
 // this code is heavily based on https://github.com/basgys/goxml2json
 // main changes are to decode into a structure that preserves the original order
 // of the map keys.
 func (dec *xmlDecoder) decodeXML(root *xmlNode) error {
-	xmlDec := xml.NewDecoder(dec.reader)
+	reader := dec.reader
+	if dec.prefs.KeepCData {
+		// encoding/xml hands back both plain text and CDATA sections as
+		// indistinguishable CharData tokens, so scan the raw input once
+		// to record each token's source form in document order.
+		data, err := io.ReadAll(dec.reader)
+		if err != nil {
+			return err
+		}
+		dec.chardataForms = scanXMLChardataForms(data)
+		dec.chardataIndex = 0
+		reader = bytes.NewReader(data)
+	}
+
+	xmlDec := xml.NewDecoder(reader)
 	xmlDec.Strict = dec.prefs.StrictMode
 	// That will convert the charset if the provided XML is non-UTF-8
 	xmlDec.CharsetReader = charset.NewReaderLabel
@@ -293,6 +351,13 @@ func (dec *xmlDecoder) decodeXML(root *xmlNode) error {
 			}
 		case xml.CharData:
 
+			// form must be consumed per token to stay aligned with the
+			// scanner, even when the trimmed segment is discarded below.
+			isCData := false
+			if dec.prefs.KeepCData {
+				isCData = dec.nextChardataForm()
+			}
+
 			// Extract XML data (if any)
 			newBit := trimNonGraphic(string(se))
 			if !started && len(newBit) > 0 {
@@ -301,6 +366,9 @@ func (dec *xmlDecoder) decodeXML(root *xmlNode) error {
 
 			if len(newBit) > 0 {
 				elem.n.Data = append(elem.n.Data, newBit)
+				if dec.prefs.KeepCData {
+					elem.n.DataForms = append(elem.n.DataForms, isCData)
+				}
 				elem.state = "chardata"
 				log.Debugf("chardata [%v] for %v", elem.n.Data, elem.label)
 			}
@@ -411,4 +479,159 @@ func trimNonGraphic(s string) string {
 	}
 
 	return string([]rune(s)[*first : last+1])
+}
+
+var (
+	cdataSectionStart = []byte("<![CDATA[")
+	cdataSectionEnd   = []byte("]]>")
+	xmlCommentStart   = []byte("<!--")
+	xmlCommentEnd     = []byte("-->")
+	xmlProcInstEnd    = []byte("?>")
+)
+
+func indexAfter(data []byte, start int, sep []byte) int {
+	if start >= len(data) {
+		return -1
+	}
+	idx := bytes.Index(data[start:], sep)
+	if idx < 0 {
+		return -1
+	}
+	return start + idx
+}
+
+// scanXMLChardataForms walks the raw XML bytes and records, in document
+// order, whether each character data token emitted by encoding/xml
+// originates from a CDATA section (true) or plain text (false).
+//
+// encoding/xml returns both plain text and CDATA sections as plain
+// CharData tokens with no marker, so this scanner mirrors the lexical
+// token boundaries (text runs, elements and quoted attributes,
+// comments, processing instructions, directives and CDATA sections)
+// to pair one record with every CharData token. It does not need to
+// decode entities or charsets: CharData tokens and records line up
+// structurally, one per text run or CDATA section.
+func scanXMLChardataForms(data []byte) []bool {
+	forms := make([]bool, 0)
+	i := 0
+	for i < len(data) {
+		if data[i] != '<' {
+			start := i
+			for i < len(data) && data[i] != '<' {
+				i++
+			}
+			if i > start {
+				forms = append(forms, false)
+			}
+			continue
+		}
+
+		if i+1 >= len(data) {
+			break
+		}
+		switch data[i+1] {
+		case '?':
+			// processing instruction: skip to ?>
+			if end := indexAfter(data, i+2, xmlProcInstEnd); end >= 0 {
+				i = end + len(xmlProcInstEnd)
+			} else {
+				return forms
+			}
+		case '!':
+			switch {
+			case bytes.HasPrefix(data[i:], xmlCommentStart):
+				// comment: skip to -->
+				if end := indexAfter(data, i+len(xmlCommentStart), xmlCommentEnd); end >= 0 {
+					i = end + len(xmlCommentEnd)
+				} else {
+					return forms
+				}
+			case bytes.HasPrefix(data[i:], cdataSectionStart):
+				contentStart := i + len(cdataSectionStart)
+				end := indexAfter(data, contentStart, cdataSectionEnd)
+				if end < 0 {
+					// unterminated CDATA section; encoding/xml will
+					// report a syntax error when it reaches it
+					forms = append(forms, true)
+					return forms
+				}
+				forms = append(forms, true)
+				i = end + len(cdataSectionEnd)
+			default:
+				// directive (e.g. <!DOCTYPE ...>)
+				i = skipXMLDirective(data, i+2)
+			}
+		default:
+			// start or end element tag: skip to its closing '>',
+			// respecting quoted attribute values
+			i = skipXMLTag(data, i+1)
+		}
+	}
+	return forms
+}
+
+// skipXMLTag skips over an element start/end tag starting just after
+// the leading '<', returning the offset just past its closing '>'.
+// Quoted attribute values (which may contain '>' or '<![CDATA[') do not
+// terminate the tag.
+func skipXMLTag(data []byte, i int) int {
+	var inquote byte
+	for ; i < len(data); i++ {
+		c := data[i]
+		if inquote != 0 {
+			if c == inquote {
+				inquote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			inquote = c
+		case '>':
+			return i + 1
+		}
+	}
+	return i
+}
+
+// skipXMLDirective skips over a directive body starting just after the
+// leading '<!', returning the offset just past its closing '>'. Nested
+// markup angle brackets, quoted strings and comments are handled with
+// the same rules encoding/xml applies to directives.
+func skipXMLDirective(data []byte, i int) int {
+	depth := 0
+	var inquote byte
+	for i < len(data) {
+		c := data[i]
+		if inquote != 0 {
+			if c == inquote {
+				inquote = 0
+			}
+			i++
+			continue
+		}
+		switch {
+		case c == '"' || c == '\'':
+			inquote = c
+			i++
+		case c == '>':
+			if depth == 0 {
+				return i + 1
+			}
+			depth--
+			i++
+		case c == '<' && bytes.HasPrefix(data[i:], xmlCommentStart):
+			end := indexAfter(data, i+len(xmlCommentStart), xmlCommentEnd)
+			if end < 0 {
+				return len(data)
+			}
+			i = end + len(xmlCommentEnd)
+		case c == '<':
+			depth++
+			i++
+		default:
+			i++
+		}
+	}
+	return i
 }

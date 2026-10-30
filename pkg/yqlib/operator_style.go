@@ -79,7 +79,9 @@ func getStyleOperator(_ *dataTreeNavigator, context Context, _ *ExpressionNode) 
 	for el := context.MatchingNodes.Front(); el != nil; el = el.Next() {
 		candidate := el.Value.(*CandidateNode)
 		var style string
-		switch candidate.Style {
+		// CdataStyle is an internal XML round-trip marker, never a
+		// user selectable YAML style.
+		switch candidate.Style &^ CdataStyle {
 		case TaggedStyle:
 			style = "tagged"
 		case DoubleQuotedStyle:

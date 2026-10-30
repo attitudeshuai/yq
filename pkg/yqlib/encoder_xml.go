@@ -30,6 +30,45 @@ func (e *xmlEncoder) CanHandleAliases() bool {
 	return false
 }
 
+// isCDataSegment reports whether the scalar should be written back as a
+// CDATA section. The recorded source form only survives for untouched
+// segments: anything rewritten (value no longer matches the recorded
+// source value) or created by other formats falls back to plain,
+// escaped character data.
+func (e *xmlEncoder) isCDataSegment(node *CandidateNode) bool {
+	if !e.prefs.KeepCData || node.Kind != ScalarNode || node.Style&CdataStyle == 0 {
+		return false
+	}
+	return node.SourceValue != "" && node.SourceValue == node.Value
+}
+
+// encodeCharDataSegment writes one character data segment, either as a
+// CDATA section in its recorded source form or as plain escaped text.
+// element names the enclosing element and segment is the 1-based
+// position of the segment within that element, so illegal CDATA values
+// can be reported at a locatable position.
+func (e *xmlEncoder) encodeCharDataSegment(encoder *xml.Encoder, element string, segment int, node *CandidateNode) error {
+	if !e.isCDataSegment(node) {
+		var charData xml.CharData = []byte(node.Value)
+		return encoder.EncodeToken(charData)
+	}
+	if i := strings.Index(node.Value, "]]>"); i >= 0 {
+		return fmt.Errorf(
+			"cannot encode CDATA section in element <%s>, character data segment %d: value contains the illegal CDATA termination sequence \"]]>\" at position %d",
+			element, segment, i)
+	}
+	// flush token output so the raw CDATA bytes stay ordered relative
+	// to the buffered encoder tokens; depth/indent state lives in the
+	// encoder and is unaffected.
+	if err := encoder.Flush(); err != nil {
+		return err
+	}
+	if _, err := e.writer.Write([]byte("<![CDATA[" + node.Value + "]]>")); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (e *xmlEncoder) PrintDocumentSeparator(_ io.Writer) error {
 	return nil
 }
@@ -179,6 +218,9 @@ func (e *xmlEncoder) doEncode(encoder *xml.Encoder, node *CandidateNode, start x
 	case MappingNode:
 		return e.encodeMap(encoder, node, start)
 	case SequenceNode:
+		if e.prefs.KeepCData && node.Style&CdataStyle != 0 {
+			return e.encodeContentSegments(encoder, node, start)
+		}
 		return e.encodeArray(encoder, node, start)
 	case ScalarNode:
 		err := e.encodeStart(encoder, node, start)
@@ -186,8 +228,7 @@ func (e *xmlEncoder) doEncode(encoder *xml.Encoder, node *CandidateNode, start x
 			return err
 		}
 
-		var charData xml.CharData = []byte(node.Value)
-		err = encoder.EncodeToken(charData)
+		err = e.encodeCharDataSegment(encoder, start.Name.Local, 1, node)
 		if err != nil {
 			return err
 		}
@@ -199,6 +240,39 @@ func (e *xmlEncoder) doEncode(encoder *xml.Encoder, node *CandidateNode, start x
 		return e.encodeEnd(encoder, node, start)
 	}
 	return fmt.Errorf("unsupported type %v", node.Tag)
+}
+
+// encodeContentSegments writes a sequence of character data segments
+// (plain text and CDATA) into a single element, preserving segment
+// order and recorded form.
+func (e *xmlEncoder) encodeContentSegments(encoder *xml.Encoder, node *CandidateNode, start xml.StartElement) error {
+	if err := e.encodeComment(encoder, headAndLineComment(node)); err != nil {
+		return err
+	}
+
+	if err := e.encodeStart(encoder, node, start); err != nil {
+		return err
+	}
+
+	for i, segment := range node.Content {
+		if segment.Kind != ScalarNode {
+			continue
+		}
+		if err := e.encodeComment(encoder, headComment(segment)); err != nil {
+			return err
+		}
+		if err := e.encodeCharDataSegment(encoder, start.Name.Local, i+1, segment); err != nil {
+			return err
+		}
+		if err := e.encodeComment(encoder, lineComment(segment)); err != nil {
+			return err
+		}
+	}
+
+	if err := e.encodeComment(encoder, footComment(node)); err != nil {
+		return err
+	}
+	return e.encodeEnd(encoder, node, start)
 }
 
 var xmlEncodeMultilineCommentRegex = regexp.MustCompile(`(^|\n) *# ?(.*)`)
@@ -309,10 +383,26 @@ func (e *xmlEncoder) encodeMap(encoder *xml.Encoder, node *CandidateNode, start 
 			if err != nil {
 				return err
 			}
-			var charData xml.CharData = []byte(value.Value)
-			err = encoder.EncodeToken(charData)
-			if err != nil {
-				return err
+			if e.prefs.KeepCData && value.Kind == SequenceNode {
+				for i, segment := range value.Content {
+					if segment.Kind != ScalarNode {
+						continue
+					}
+					if err = e.encodeCharDataSegment(encoder, start.Name.Local, i+1, segment); err != nil {
+						return err
+					}
+				}
+			} else if e.prefs.KeepCData && value.Kind == ScalarNode {
+				err = e.encodeCharDataSegment(encoder, start.Name.Local, 1, value)
+				if err != nil {
+					return err
+				}
+			} else {
+				var charData xml.CharData = []byte(value.Value)
+				err = encoder.EncodeToken(charData)
+				if err != nil {
+					return err
+				}
 			}
 			err = e.encodeComment(encoder, footComment(value))
 			if err != nil {

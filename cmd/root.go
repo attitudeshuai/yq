@@ -128,6 +128,7 @@ yq -P -oy sample.json
 	}
 	rootCmd.PersistentFlags().BoolVar(&yqlib.ConfiguredXMLPreferences.StrictMode, "xml-strict-mode", yqlib.ConfiguredXMLPreferences.StrictMode, "enables strict parsing of XML. See https://pkg.go.dev/encoding/xml for more details.")
 	rootCmd.PersistentFlags().BoolVar(&yqlib.ConfiguredXMLPreferences.KeepNamespace, "xml-keep-namespace", yqlib.ConfiguredXMLPreferences.KeepNamespace, "enables keeping namespace after parsing attributes")
+	rootCmd.PersistentFlags().BoolVar(&yqlib.ConfiguredXMLPreferences.KeepCData, "xml-keep-cdata", yqlib.ConfiguredXMLPreferences.KeepCData, "preserves CDATA sections and the order of text/CDATA character data segments when round tripping XML")
 	rootCmd.PersistentFlags().BoolVar(&yqlib.ConfiguredXMLPreferences.UseRawToken, "xml-raw-token", yqlib.ConfiguredXMLPreferences.UseRawToken, "enables using RawToken method instead Token. Commonly disables namespace translations. See https://pkg.go.dev/encoding/xml#Decoder.RawToken for details.")
 	rootCmd.PersistentFlags().StringVar(&yqlib.ConfiguredXMLPreferences.ProcInstPrefix, "xml-proc-inst-prefix", yqlib.ConfiguredXMLPreferences.ProcInstPrefix, "prefix for xml processing instructions (e.g. <?xml version=\"1\"?>)")
 	if err = rootCmd.RegisterFlagCompletionFunc("xml-proc-inst-prefix", cobra.NoFileCompletions); err != nil {

@@ -441,6 +441,7 @@ Flags:
       --xml-attribute-prefix string     prefix for xml attributes (default "+@")
       --xml-content-name string         name for xml content (if no attribute name is present). (default "+content")
       --xml-directive-name string       name for xml directives (e.g. <!DOCTYPE thing cat>) (default "+directive")
+      --xml-keep-cdata                  preserves CDATA sections and the order of text/CDATA character data segments when round tripping XML
       --xml-keep-namespace              enables keeping namespace after parsing attributes (default true)
       --xml-proc-inst-prefix string     prefix for xml processing instructions (e.g. <?xml version="1"?>) (default "+p_")
       --xml-raw-token                   enables using RawToken method instead Token. Commonly disables namespace translations. See https://pkg.go.dev/encoding/xml#Decoder.RawToken for details. (default true)

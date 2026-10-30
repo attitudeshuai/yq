@@ -35,6 +35,7 @@ In addition to the above flags, there are the following xml encoder/decoder opti
 | `--xml-raw-token` | true |  Does not verify that start and end elements match and does not translate name space prefixes to their corresponding URLs. |
 | `--xml-skip-proc-inst` | false | Skips over processing instructions, e.g. `<?xml version="1"?>` |
 | `--xml-skip-directives` | false | Skips over directives, e.g. ```<!DOCTYPE config system "blah">``` |
+| `--xml-keep-cdata` | false | Preserves CDATA sections and the order of text/CDATA character data segments when round tripping XML. Segments that are rewritten are emitted as plain escaped text instead. |
 
 
 See below for examples

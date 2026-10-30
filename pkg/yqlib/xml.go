@@ -11,6 +11,10 @@ type XmlPreferences struct {
 	DirectiveName   string
 	SkipProcInst    bool
 	SkipDirectives  bool
+	// KeepCData preserves the original form and order of XML character
+	// data segments (plain text vs CDATA sections) through an XML
+	// decode/encode round trip. Defaults to false.
+	KeepCData bool
 }
 
 func NewDefaultXmlPreferences() XmlPreferences {
@@ -25,6 +29,7 @@ func NewDefaultXmlPreferences() XmlPreferences {
 		DirectiveName:   "+directive",
 		SkipProcInst:    false,
 		SkipDirectives:  false,
+		KeepCData:       false,
 	}
 }
 
@@ -40,6 +45,7 @@ func (p *XmlPreferences) Copy() XmlPreferences {
 		DirectiveName:   p.DirectiveName,
 		SkipProcInst:    p.SkipProcInst,
 		SkipDirectives:  p.SkipDirectives,
+		KeepCData:       p.KeepCData,
 	}
 }
 

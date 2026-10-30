@@ -91,13 +91,13 @@ var participleYqRules = []*participleYqRule{
 	{"Uri", `@uri`, encodeWithIndent(UriFormat, 0), 0},
 	{"SH", `@sh`, encodeWithIndent(ShFormat, 0), 0},
 
-	{"LoadXML", `load_?xml|xml_?load`, loadOp(NewXMLDecoder(ConfiguredXMLPreferences)), 0},
+	{"LoadXML", `load_?xml|xml_?load`, loadOp(func() Decoder { return NewXMLDecoder(ConfiguredXMLPreferences) }), 0},
 
-	{"LoadBase64", `load_?base64`, loadOp(NewBase64Decoder()), 0},
+	{"LoadBase64", `load_?base64`, loadOp(func() Decoder { return NewBase64Decoder() }), 0},
 
-	{"LoadProperties", `load_?props`, loadOp(NewPropertiesDecoder()), 0},
+	{"LoadProperties", `load_?props`, loadOp(func() Decoder { return NewPropertiesDecoder() }), 0},
 	simpleOp("load_?str|str_?load", loadStringOpType),
-	{"LoadYaml", `load`, loadOp(NewYamlDecoder(LoadYamlPreferences)), 0},
+	{"LoadYaml", `load`, loadOp(func() Decoder { return NewYamlDecoder(LoadYamlPreferences) }), 0},
 
 	simpleOp("system", systemOpType),
 
@@ -565,9 +565,14 @@ func decodeOp(format *Format) yqAction {
 	return opTokenWithPrefs(decodeOpType, nil, prefs)
 }
 
-func loadOp(decoder Decoder) yqAction {
-	prefs := loadPrefs{decoder}
-	return opTokenWithPrefs(loadOpType, nil, prefs)
+func loadOp(decoderFactory func() Decoder) yqAction {
+	return func(token lexer.Token) (*token, error) {
+		// build the decoder when the expression is parsed, so the
+		// currently configured format preferences (e.g. XML flags)
+		// take effect rather than those captured at package init.
+		prefs := loadPrefs{decoder: decoderFactory()}
+		return opTokenWithPrefs(loadOpType, nil, prefs)(token)
+	}
 }
 
 func opToken(op *operationType) yqAction {

@@ -23,10 +23,13 @@ func MapYamlStyle(original yaml.Style) Style {
 	case 0:
 		return 0
 	}
-	return Style(original)
+	// CDATA is an XML-only source form that YAML input cannot declare.
+	return Style(original) &^ CdataStyle
 }
 
 func MapToYamlStyle(original Style) yaml.Style {
+	// CDATA is an XML-only source form, never serialise it to YAML.
+	original &^= CdataStyle
 	switch original {
 	case TaggedStyle:
 		return yaml.TaggedStyle

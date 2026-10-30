@@ -25,6 +25,10 @@ const (
 	LiteralStyle
 	FoldedStyle
 	FlowStyle
+	// CdataStyle marks character data that originated in (and should round
+	// trip back to) an XML CDATA section. It is only meaningful to XML
+	// decoders/encoders and is stripped when mapping to YAML styles.
+	CdataStyle
 )
 
 // EncodeHint controls how a mapping node is serialised by format-specific encoders
@@ -96,6 +100,13 @@ type CandidateNode struct {
 	Anchor  string
 	Alias   *CandidateNode
 	Content []*CandidateNode
+
+	// SourceValue records the scalar value as it was decoded, allowing
+	// decoders/encoders that preserve source representation (e.g. XML
+	// CDATA sections) to tell untouched segments apart from rewritten
+	// ones. Empty means no source value was recorded. It is never
+	// emitted to output formats.
+	SourceValue string
 
 	HeadComment string
 	LineComment string
@@ -407,6 +418,8 @@ func (n *CandidateNode) doCopy(cloneContent bool) *CandidateNode {
 		Value:  n.Value,
 		Anchor: n.Anchor,
 
+		SourceValue: n.SourceValue,
+
 		// ok not to clone this,
 		// as its a reference to somewhere else.
 		Alias:   n.Alias,
@@ -459,6 +472,13 @@ func (n *CandidateNode) UpdateFrom(other *CandidateNode, prefs assignPreferences
 	n.AddChildren(other.Content)
 
 	n.Value = other.Value
+
+	// adopt the recorded source value when the incoming node brings one
+	// (e.g. an untouched CDATA segment assigned onto a fresh target);
+	// a rewritten value leaves the old recording behind on purpose.
+	if other.SourceValue != "" {
+		n.SourceValue = other.SourceValue
+	}
 
 	n.UpdateAttributesFrom(other, prefs)
 
@@ -563,6 +583,9 @@ func styleToString(s Style) string {
 	}
 	if s&FlowStyle != 0 {
 		styles = append(styles, "FlowStyle")
+	}
+	if s&CdataStyle != 0 {
+		styles = append(styles, "CdataStyle")
 	}
 	return strings.Join(styles, ",")
 }
