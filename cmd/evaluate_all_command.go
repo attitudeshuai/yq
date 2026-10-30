@@ -50,6 +50,13 @@ func evaluateAll(cmd *cobra.Command, args []string) (cmdError error) {
 	// 1 arg, read file in sequence
 	// 2+ args, [0] = expression, file the rest
 
+	// Commands own their registry (nested inside any process-level run) so
+	// they also finalise correctly when invoked without a wrapper run.
+	run := yqlib.BeginRun()
+	defer run.EndRun()
+	// Runs last so the registry finalises every registered artefact.
+	defer finaliseRun(cmd, run, &cmdError)
+
 	var err error
 
 	expression, args, err := initCommand(cmd, args)
@@ -67,13 +74,6 @@ func evaluateAll(cmd *cobra.Command, args []string) (cmdError error) {
 		if err != nil {
 			return err
 		}
-		// need to indirectly call the function so  that completedSuccessfully is
-		// passed when we finish execution as opposed to now
-		defer func() {
-			if cmdError == nil {
-				cmdError = writeInPlaceHandler.FinishWriteInPlace(completedSuccessfully)
-			}
-		}()
 	}
 
 	format, err := yqlib.FormatFromString(outputFormat)
@@ -114,9 +114,11 @@ func evaluateAll(cmd *cobra.Command, args []string) (cmdError error) {
 		if frontMatter == "process" {
 			reader := frontMatterHandler.GetContentReader()
 			printer.SetAppendix(reader)
-			defer yqlib.SafelyCloseReader(reader)
 		}
-		defer frontMatterHandler.CleanUp()
+	}
+
+	if run.Cancelled() {
+		return yqlib.ErrInterrupted
 	}
 
 	allAtOnceEvaluator := yqlib.NewAllAtOnceEvaluator()
@@ -132,8 +134,6 @@ func evaluateAll(cmd *cobra.Command, args []string) (cmdError error) {
 	default:
 		err = allAtOnceEvaluator.EvaluateFiles(processExpression(expression), args, printer, decoder)
 	}
-
-	completedSuccessfully = err == nil
 
 	if err == nil && exitStatus && !printer.PrintedAnything() {
 		return errors.New("no matches found")

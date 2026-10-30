@@ -77,6 +77,10 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 		return nil
 	}
 
+	if err := currentRunCancelled(); err != nil {
+		return err
+	}
+
 	if !p.encoder.CanHandleAliases() {
 		explodeOp := Operation{OperationType: explodeOpType}
 		explodeNode := ExpressionNode{Operation: &explodeOp}
@@ -95,6 +99,9 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 	}
 
 	for el := matchingNodes.Front(); el != nil; el = el.Next() {
+		if err := currentRunCancelled(); err != nil {
+			return err
+		}
 
 		mappedDoc := el.Value.(*CandidateNode)
 		log.Debugf("print sep logic: p.firstTimePrinting: %v, previousDocIndex: %v", p.firstTimePrinting, p.previousDocIndex)
@@ -147,11 +154,18 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 		if err := writer.Flush(); err != nil {
 			return err
 		}
+		ActiveRun().markWriterComplete(writer)
+		if err := currentRunCancelled(); err != nil {
+			return err
+		}
 		log.Debugf("done printing results")
 	}
 
 	// what happens if I remove output format check?
 	if p.appendixReader != nil {
+		if err := currentRunCancelled(); err != nil {
+			return err
+		}
 		writer, err := p.printerWriter.GetWriter(nil)
 		if err != nil {
 			return err

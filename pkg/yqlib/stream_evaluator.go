@@ -34,6 +34,9 @@ func (s *streamEvaluator) EvaluateNew(expression string, printer Printer) error 
 	inputList := list.New()
 	inputList.PushBack(candidateNode)
 
+	if err := currentRunCancelled(); err != nil {
+		return err
+	}
 	result, errorParsing := s.treeNavigator.GetMatchingNodes(Context{MatchingNodes: inputList}, node)
 	if errorParsing != nil {
 		return errorParsing
@@ -49,6 +52,9 @@ func (s *streamEvaluator) EvaluateFiles(expression string, filenames []string, p
 	}
 
 	for _, filename := range filenames {
+		if err := currentRunCancelled(); err != nil {
+			return err
+		}
 		reader, cleanup, err := readStream(filename)
 
 		if err != nil {
@@ -79,6 +85,9 @@ func (s *streamEvaluator) Evaluate(filename string, reader io.Reader, node *Expr
 		return 0, err
 	}
 	for {
+		if err := currentRunCancelled(); err != nil {
+			return currentIndex, err
+		}
 		candidateNode, errorReading := decoder.Decode()
 
 		if errors.Is(errorReading, io.EOF) {
@@ -97,6 +106,9 @@ func (s *streamEvaluator) Evaluate(filename string, reader io.Reader, node *Expr
 		result, errorParsing := s.treeNavigator.GetMatchingNodes(Context{MatchingNodes: inputList}, node)
 		if errorParsing != nil {
 			return currentIndex, errorParsing
+		}
+		if err := currentRunCancelled(); err != nil {
+			return currentIndex, err
 		}
 		err := printer.PrintResults(result.MatchingNodes)
 

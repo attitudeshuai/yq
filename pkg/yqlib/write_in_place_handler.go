@@ -12,11 +12,12 @@ type writeInPlaceHandler interface {
 type writeInPlaceHandlerImpl struct {
 	inputFilename string
 	tempFile      *os.File
+	tempEntry     *registryEntry
 }
 
 func NewWriteInPlaceHandler(inputFile string) writeInPlaceHandler {
 
-	return &writeInPlaceHandlerImpl{inputFile, nil}
+	return &writeInPlaceHandlerImpl{inputFilename: inputFile}
 }
 
 func (w *writeInPlaceHandlerImpl) CreateTempFile() (*os.File, error) {
@@ -25,6 +26,10 @@ func (w *writeInPlaceHandlerImpl) CreateTempFile() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Register before the permission/ownership steps so a failure there
+	// still leaves the temp file pending on the registry for cleanup.
+	w.tempEntry = ActiveRun().registerRename(file.Name(), file, w.inputFilename)
+
 	info, err := os.Stat(w.inputFilename)
 	if err != nil {
 		return nil, err
@@ -45,12 +50,13 @@ func (w *writeInPlaceHandlerImpl) CreateTempFile() (*os.File, error) {
 
 func (w *writeInPlaceHandlerImpl) FinishWriteInPlace(evaluatedSuccessfully bool) error {
 	log.Debugf("Going to write in place, evaluatedSuccessfully=%v, target=%v", evaluatedSuccessfully, w.inputFilename)
-	safelyCloseFile(w.tempFile)
+	if w.tempEntry == nil {
+		w.tempEntry = ActiveRun().registerRename(w.tempFile.Name(), w.tempFile, w.inputFilename)
+	}
 	if evaluatedSuccessfully {
 		log.Debug("Moving temp file to target")
-		return tryRenameFile(w.tempFile.Name(), w.inputFilename)
+		return w.tempEntry.Commit()
 	}
-	tryRemoveTempFile(w.tempFile.Name())
-
+	w.tempEntry.Rollback()
 	return nil
 }

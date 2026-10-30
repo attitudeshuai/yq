@@ -58,11 +58,35 @@ func processExpression(expression string) string {
 	return expression
 }
 
+func finaliseRun(cmd *cobra.Command, run *yqlib.Run, cmdError *error) {
+	success := *cmdError == nil
+	interrupted, finaliseErr := run.Finalise(success)
+	if finaliseErr != nil && *cmdError == nil {
+		*cmdError = finaliseErr
+	}
+	if interrupted || errors.Is(*cmdError, yqlib.ErrInterrupted) {
+		if *cmdError == nil || errors.Is(*cmdError, yqlib.ErrInterrupted) {
+			// Interruptions are not command errors: keep stderr clean.
+			cmd.SilenceErrors = true
+			*cmdError = yqlib.ErrInterrupted
+		}
+		// A different error (e.g. a write failure racing the signal) keeps
+		// its text and exit code; do not silence it.
+	}
+}
+
 func evaluateSequence(cmd *cobra.Command, args []string) (cmdError error) {
 	// 0 args, read std in
 	// 1 arg, null input, process expression
 	// 1 arg, read file in sequence
 	// 2+ args, [0] = expression, file the rest
+
+	// Commands own their registry (nested inside any process-level run) so
+	// they also finalise correctly when invoked without a wrapper run.
+	run := yqlib.BeginRun()
+	defer run.EndRun()
+	// Runs last so the registry finalises every registered artefact.
+	defer finaliseRun(cmd, run, &cmdError)
 
 	out := cmd.OutOrStdout()
 
@@ -81,13 +105,6 @@ func evaluateSequence(cmd *cobra.Command, args []string) (cmdError error) {
 		if err != nil {
 			return err
 		}
-		// need to indirectly call the function so  that completedSuccessfully is
-		// passed when we finish execution as opposed to now
-		defer func() {
-			if cmdError == nil {
-				cmdError = writeInPlaceHandler.FinishWriteInPlace(completedSuccessfully)
-			}
-		}()
 	}
 
 	format, err := yqlib.FormatFromString(outputFormat)
@@ -135,9 +152,11 @@ func evaluateSequence(cmd *cobra.Command, args []string) (cmdError error) {
 		if frontMatter == "process" {
 			reader := frontMatterHandler.GetContentReader()
 			printer.SetAppendix(reader)
-			defer yqlib.SafelyCloseReader(reader)
 		}
-		defer frontMatterHandler.CleanUp()
+	}
+
+	if run.Cancelled() {
+		return yqlib.ErrInterrupted
 	}
 
 	switch len(args) {
@@ -151,7 +170,6 @@ func evaluateSequence(cmd *cobra.Command, args []string) (cmdError error) {
 	default:
 		err = streamEvaluator.EvaluateFiles(processExpression(expression), args, printer, decoder)
 	}
-	completedSuccessfully = err == nil
 
 	if err == nil && exitStatus && !printer.PrintedAnything() {
 		return errors.New("no matches found")

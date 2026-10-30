@@ -10,9 +10,11 @@ func tryRenameFile(from string, to string) error {
 	if info, err := os.Lstat(to); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		log.Debug("Target file is symlink, skipping rename and attempting to copy contents")
 
+		copyFallback := ActiveRun().registerCopyFallback(from, to)
 		if copyError := copyFileContents(from, to); copyError != nil {
 			return fmt.Errorf("failed copying from %v to %v: %w", from, to, copyError)
 		}
+		copyFallback.Commit()
 		tryRemoveTempFile(from)
 		return nil
 	} else if renameError := os.Rename(from, to); renameError != nil {
@@ -21,9 +23,11 @@ func tryRenameFile(from string, to string) error {
 		log.Debug("going to try copying instead")
 		// can't do this rename when running in docker to a file targeted in a mounted volume,
 		// so gracefully degrade to copying the entire contents.
+		copyFallback := ActiveRun().registerCopyFallback(from, to)
 		if copyError := copyFileContents(from, to); copyError != nil {
 			return fmt.Errorf("failed copying from %v to %v: %w", from, to, copyError)
 		}
+		copyFallback.Commit()
 		tryRemoveTempFile(from)
 	}
 	return nil

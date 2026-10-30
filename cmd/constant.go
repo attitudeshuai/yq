@@ -32,8 +32,6 @@ var frontMatter = ""
 var splitFileExp = ""
 var splitFileExpFile = ""
 
-var completedSuccessfully = false
-
 var forceExpression = ""
 
 var expressionFile = ""

@@ -49,6 +49,9 @@ func (e *allAtOnceEvaluator) EvaluateFiles(expression string, filenames []string
 
 	var allDocuments = list.New()
 	for _, filename := range filenames {
+		if err := currentRunCancelled(); err != nil {
+			return err
+		}
 		reader, cleanup, err := readStream(filename)
 		if err != nil {
 			return err
@@ -68,9 +71,19 @@ func (e *allAtOnceEvaluator) EvaluateFiles(expression string, filenames []string
 		allDocuments.PushBack(candidateNode)
 	}
 
+	if err := currentRunCancelled(); err != nil {
+		return err
+	}
 	matches, err := e.EvaluateCandidateNodes(expression, allDocuments)
 	if err != nil {
 		return err
 	}
-	return printer.PrintResults(matches)
+	if err := currentRunCancelled(); err != nil {
+		return err
+	}
+	printErr := printer.PrintResults(matches)
+	if printErr != nil {
+		return printErr
+	}
+	return currentRunCancelled()
 }

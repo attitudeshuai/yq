@@ -15,6 +15,7 @@ type PrinterWriter interface {
 
 type singlePrinterWriter struct {
 	bufferedWriter *bufio.Writer
+	registered     bool
 }
 
 func NewSinglePrinterWriter(writer io.Writer) PrinterWriter {
@@ -24,6 +25,12 @@ func NewSinglePrinterWriter(writer io.Writer) PrinterWriter {
 }
 
 func (sp *singlePrinterWriter) GetWriter(_ *CandidateNode) (*bufio.Writer, error) {
+	if !sp.registered {
+		// Non-file sink: flushed during finalisation, underlying writer
+		// (stdout or an in-place temp file) is owned and closed elsewhere.
+		ActiveRun().registerSink("<output>", sp.bufferedWriter, nil, false)
+		sp.registered = true
+	}
 	return sp.bufferedWriter, nil
 }
 
@@ -53,6 +60,12 @@ func NewMultiPrinterWriter(expression *ExpressionNode, format *Format) PrinterWr
 }
 
 func (sp *multiPrintWriter) GetWriter(node *CandidateNode) (*bufio.Writer, error) {
+	// Once cancelled, never open another split file: evaluators and printers
+	// check this too, but the open site itself is authoritative.
+	if err := currentRunCancelled(); err != nil {
+		return nil, err
+	}
+
 	name := ""
 
 	indexVariableNode := CandidateNode{Kind: ScalarNode, Tag: "!!int", Value: fmt.Sprintf("%v", sp.index)}
@@ -82,6 +95,7 @@ func (sp *multiPrintWriter) GetWriter(node *CandidateNode) (*bufio.Writer, error
 	}
 	sp.index = sp.index + 1
 
-	return bufio.NewWriter(f), nil
-
+	writer := bufio.NewWriter(f)
+	ActiveRun().registerSink(name, writer, f, true)
+	return writer, nil
 }

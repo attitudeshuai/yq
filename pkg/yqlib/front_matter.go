@@ -33,10 +33,12 @@ type frontMatterHandlerImpl struct {
 	originalFilename        string
 	yamlFrontMatterFilename string
 	contentReader           io.Reader
+	yamlTempEntry           *registryEntry
+	yamlTempClosed          bool
 }
 
 func NewFrontMatterHandler(originalFilename string) frontMatterHandler {
-	return &frontMatterHandlerImpl{originalFilename, "", nil}
+	return &frontMatterHandlerImpl{originalFilename: originalFilename}
 }
 
 func (f *frontMatterHandlerImpl) GetYamlFrontMatterFilename() string {
@@ -48,7 +50,19 @@ func (f *frontMatterHandlerImpl) GetContentReader() io.Reader {
 }
 
 func (f *frontMatterHandlerImpl) CleanUp() {
-	tryRemoveTempFile(f.yamlFrontMatterFilename)
+	if f.yamlTempEntry != nil {
+		f.yamlTempEntry.Rollback()
+	} else {
+		tryRemoveTempFile(f.yamlFrontMatterFilename)
+	}
+}
+
+func (f *frontMatterHandlerImpl) closeYamlTempFile(file *os.File) {
+	if f.yamlTempClosed {
+		return
+	}
+	f.yamlTempClosed = true
+	safelyCloseFile(file)
 }
 
 // Splits the given file by yaml front matter
@@ -64,6 +78,7 @@ func (f *frontMatterHandlerImpl) Split() error {
 		if err != nil {
 			return err
 		}
+		ActiveRun().registerCloser(file, "front matter input: "+f.originalFilename)
 		reader = bufio.NewReader(stripUTF8BOM(file))
 	}
 	f.contentReader = reader
@@ -73,6 +88,7 @@ func (f *frontMatterHandlerImpl) Split() error {
 		return err
 	}
 	f.yamlFrontMatterFilename = yamlTempFile.Name()
+	f.yamlTempEntry = ActiveRun().registerScratchFile(yamlTempFile.Name())
 	log.Debugf("yamlTempFile: %v", yamlTempFile.Name())
 
 	lineCount := 0
@@ -83,6 +99,7 @@ func (f *frontMatterHandlerImpl) Split() error {
 			// we've finished reading the yaml content..I guess
 			break
 		} else if err != nil {
+			f.closeYamlTempFile(yamlTempFile)
 			return err
 		}
 		if lineCount > 0 && string(peekBytes) == "---" {
@@ -92,17 +109,19 @@ func (f *frontMatterHandlerImpl) Split() error {
 		line, errReading := reader.ReadString('\n')
 		lineCount = lineCount + 1
 		if errReading != nil && !errors.Is(errReading, io.EOF) {
+			f.closeYamlTempFile(yamlTempFile)
 			return errReading
 		}
 
 		_, errWriting := yamlTempFile.WriteString(line)
 
 		if errWriting != nil {
+			f.closeYamlTempFile(yamlTempFile)
 			return errWriting
 		}
 	}
 
-	safelyCloseFile(yamlTempFile)
+	f.closeYamlTempFile(yamlTempFile)
 
 	return nil
 
