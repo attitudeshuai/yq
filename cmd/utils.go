@@ -182,6 +182,24 @@ func configureDecoder(evaluateTogether bool) (yqlib.Decoder, error) {
 	return yqlibDecoder, nil
 }
 
+type multiFileBatcher interface {
+	SetMultiFileBatch(bool)
+}
+
+// configureSourceErrorBatch tells the printer and printer writer that the run
+// processes a batch of multiple input files, so errors attributed to the first
+// document render the source filename. Components without the optional method
+// keep the single source behaviour.
+func configureSourceErrorBatch(printer yqlib.Printer, printerWriter yqlib.PrinterWriter, fileCount int) {
+	multiFileBatch := fileCount > 1
+	if batcher, ok := printer.(multiFileBatcher); ok {
+		batcher.SetMultiFileBatch(multiFileBatch)
+	}
+	if batcher, ok := printerWriter.(multiFileBatcher); ok {
+		batcher.SetMultiFileBatch(multiFileBatch)
+	}
+}
+
 func configurePrinterWriter(format *yqlib.Format, out io.Writer) (yqlib.PrinterWriter, error) {
 
 	var printerWriter yqlib.PrinterWriter

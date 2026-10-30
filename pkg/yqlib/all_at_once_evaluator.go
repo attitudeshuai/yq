@@ -47,6 +47,10 @@ func (e *allAtOnceEvaluator) EvaluateCandidateNodes(expression string, inputCand
 func (e *allAtOnceEvaluator) EvaluateFiles(expression string, filenames []string, printer Printer, decoder Decoder) error {
 	fileIndex := 0
 
+	if navigator, ok := e.treeNavigator.(*dataTreeNavigator); ok {
+		navigator.multiFileBatch = len(filenames) > 1
+	}
+
 	var allDocuments = list.New()
 	for _, filename := range filenames {
 		reader, cleanup, err := readStream(filename)

@@ -32,6 +32,24 @@ type multiPrintWriter struct {
 	nameExpression *ExpressionNode
 	extension      string
 	index          int
+	multiFileBatch bool
+}
+
+// splitOutputWriter annotates write errors to a split-output target with the
+// target name and the source document they originated from.
+type splitOutputWriter struct {
+	file           *os.File
+	target         string
+	candidate      *CandidateNode
+	multiFileBatch bool
+}
+
+func (w *splitOutputWriter) Write(p []byte) (int, error) {
+	n, err := w.file.Write(p)
+	if err != nil {
+		return n, newDocumentErrorForCandidate(newSplitOutputError(err, w.target), w.candidate, w.multiFileBatch)
+	}
+	return n, nil
 }
 
 func NewMultiPrinterWriter(expression *ExpressionNode, format *Format) PrinterWriter {
@@ -52,6 +70,22 @@ func NewMultiPrinterWriter(expression *ExpressionNode, format *Format) PrinterWr
 	}
 }
 
+// SetMultiFileBatch records that split output is driven by a batch of multiple
+// input files, so naming and write errors attributed to the first document
+// render the source filename. The policy is also pushed to the internal
+// navigator used to evaluate the naming expression.
+func (sp *multiPrintWriter) SetMultiFileBatch(multiFileBatch bool) {
+	sp.multiFileBatch = multiFileBatch
+	if navigator, ok := sp.treeNavigator.(*dataTreeNavigator); ok {
+		navigator.multiFileBatch = multiFileBatch
+	}
+}
+
+func (sp *multiPrintWriter) annotateTargetError(err error, name string, node *CandidateNode) error {
+	err = newSplitOutputError(err, name)
+	return newDocumentErrorForCandidate(err, node, sp.multiFileBatch)
+}
+
 func (sp *multiPrintWriter) GetWriter(node *CandidateNode) (*bufio.Writer, error) {
 	name := ""
 
@@ -61,6 +95,8 @@ func (sp *multiPrintWriter) GetWriter(node *CandidateNode) (*bufio.Writer, error
 	context.SetVariable("index", indexVariableNode.AsList())
 	result, err := sp.treeNavigator.GetMatchingNodes(context, sp.nameExpression)
 	if err != nil {
+		// naming expression failures are attributed to the source document by
+		// the navigator chokepoint (single candidate context above)
 		return nil, err
 	}
 	if result.MatchingNodes.Len() > 0 {
@@ -73,15 +109,20 @@ func (sp *multiPrintWriter) GetWriter(node *CandidateNode) (*bufio.Writer, error
 
 	err = os.MkdirAll(filepath.Dir(name), 0750)
 	if err != nil {
-		return nil, err
+		return nil, sp.annotateTargetError(err, name, node)
 	}
 	f, err := os.Create(name)
 
 	if err != nil {
-		return nil, err
+		return nil, sp.annotateTargetError(err, name, node)
 	}
 	sp.index = sp.index + 1
 
-	return bufio.NewWriter(f), nil
+	return bufio.NewWriter(&splitOutputWriter{
+		file:           f,
+		target:         name,
+		candidate:      node,
+		multiFileBatch: sp.multiFileBatch,
+	}), nil
 
 }

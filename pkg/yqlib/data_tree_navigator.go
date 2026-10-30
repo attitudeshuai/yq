@@ -15,6 +15,12 @@ type DataTreeNavigator interface {
 }
 
 type dataTreeNavigator struct {
+	// multiFileBatch records that evaluation was started against a batch of
+	// multiple input files, so document frames on the first document render
+	// the source filename. It is set by the evaluators in EvaluateFiles and
+	// defaults to false so direct/library callers keep the single source
+	// behaviour.
+	multiFileBatch bool
 }
 
 func NewDataTreeNavigator() DataTreeNavigator {
@@ -61,8 +67,25 @@ func (d *dataTreeNavigator) GetMatchingNodes(context Context, expressionNode *Ex
 	}
 	handler := expressionNode.Operation.OperationType.Handler
 	if handler != nil {
-		return handler(d, context, expressionNode)
+		result, err := handler(d, context, expressionNode)
+		if err != nil {
+			return result, d.attachDocumentError(err, context)
+		}
+		return result, nil
 	}
 	return Context{}, fmt.Errorf("unknown operator %v", expressionNode.Operation.OperationType.Type)
 
+}
+
+// attachDocumentError is the single chokepoint where operator failures are
+// attributed to their source document. Only an unambiguous context (exactly
+// one candidate node) is attributed; ambiguous multi-document contexts keep
+// the error untouched. The frame is idempotent per stage, so the layer
+// closest to the failure site wins as the error unwinds.
+func (d *dataTreeNavigator) attachDocumentError(err error, context Context) error {
+	if err == nil || context.MatchingNodes == nil || context.MatchingNodes.Len() != 1 {
+		return err
+	}
+	candidate := context.MatchingNodes.Front().Value.(*CandidateNode)
+	return newDocumentErrorForCandidate(err, candidate, d.multiFileBatch)
 }

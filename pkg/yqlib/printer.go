@@ -27,6 +27,7 @@ type resultsPrinter struct {
 	treeNavigator     DataTreeNavigator
 	appendixReader    io.Reader
 	nulSepOutput      bool
+	multiFileBatch    bool
 }
 
 func NewPrinter(encoder Encoder, printerWriter PrinterWriter) Printer {
@@ -43,6 +44,21 @@ func (p *resultsPrinter) SetNulSepOutput(nulSepOutput bool) {
 	log.Debug("Setting NUL separator output")
 
 	p.nulSepOutput = nulSepOutput
+}
+
+// SetMultiFileBatch records that the printer is handling a batch of multiple
+// input files, so write errors attributed to the first document render the
+// source filename. The policy is also pushed to the internal navigator used
+// when exploding aliases for encoders that cannot handle them.
+func (p *resultsPrinter) SetMultiFileBatch(multiFileBatch bool) {
+	p.multiFileBatch = multiFileBatch
+	if navigator, ok := p.treeNavigator.(*dataTreeNavigator); ok {
+		navigator.multiFileBatch = multiFileBatch
+	}
+}
+
+func (p *resultsPrinter) withDocumentError(err error, node *CandidateNode) error {
+	return newDocumentErrorForCandidate(err, node, p.multiFileBatch)
 }
 
 func (p *resultsPrinter) SetAppendix(reader io.Reader) {
@@ -82,6 +98,9 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 		explodeNode := ExpressionNode{Operation: &explodeOp}
 		context, err := p.treeNavigator.GetMatchingNodes(Context{MatchingNodes: matchingNodes}, &explodeNode)
 		if err != nil {
+			if matchingNodes.Len() == 1 {
+				return p.withDocumentError(err, matchingNodes.Front().Value.(*CandidateNode))
+			}
 			return err
 		}
 		matchingNodes = context.MatchingNodes
@@ -101,7 +120,7 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 		log.Debugf("%v", NodeToString(mappedDoc))
 		writer, errorWriting := p.printerWriter.GetWriter(mappedDoc)
 		if errorWriting != nil {
-			return errorWriting
+			return p.withDocumentError(errorWriting, mappedDoc)
 		}
 
 		commentsStartWithSepExp := regexp.MustCompile(`^\$yqDocSeparator\$`)
@@ -109,7 +128,7 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 
 		if (p.previousDocIndex != mappedDoc.GetDocument() || p.previousFileIndex != mappedDoc.GetFileIndex()) && !commentStartsWithSeparator {
 			if err := p.encoder.PrintDocumentSeparator(writer); err != nil {
-				return err
+				return p.withDocumentError(err, mappedDoc)
 			}
 		}
 
@@ -120,32 +139,32 @@ func (p *resultsPrinter) PrintResults(matchingNodes *list.List) error {
 		}
 
 		if err := p.encoder.PrintLeadingContent(destination, mappedDoc.LeadingContent); err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 
 		if err := p.printNode(mappedDoc, destination); err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 
 		if p.nulSepOutput {
 			removeLastEOL(tempBuffer)
 			tempBufferBytes := tempBuffer.Bytes()
 			if bytes.IndexByte(tempBufferBytes, 0) != -1 {
-				return fmt.Errorf(
+				return p.withDocumentError(fmt.Errorf(
 					"can't serialise value because it contains NUL char and you are using NUL separated output",
-				)
+				), mappedDoc)
 			}
 			if _, err := writer.Write(tempBufferBytes); err != nil {
-				return err
+				return p.withDocumentError(err, mappedDoc)
 			}
 			if _, err := writer.Write([]byte{0}); err != nil {
-				return err
+				return p.withDocumentError(err, mappedDoc)
 			}
 		}
 
 		p.previousDocIndex = mappedDoc.GetDocument()
 		if err := writer.Flush(); err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 		log.Debugf("done printing results")
 	}

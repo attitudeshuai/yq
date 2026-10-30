@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"container/list"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 )
@@ -43,7 +42,9 @@ func readStream(filename string) (io.Reader, func(), error) {
 	// and ensuring that it's not possible to give a path to a file outside that directory.
 	file, err := os.Open(filename) // #nosec
 	if err != nil {
-		return nil, nil, err
+		// attribute the error to the display name when a temporary file stands
+		// in for an input (front matter handling registers that alias)
+		return nil, nil, newDecodeError(err, resolveFilename(filename))
 	}
 	return bufio.NewReader(file), func() { safelyCloseFile(file) }, nil
 }
@@ -61,7 +62,7 @@ func readDocuments(reader io.Reader, filename string, fileIndex int, decoder Dec
 	filename = resolveFilename(filename)
 	err := decoder.Init(reader)
 	if err != nil {
-		return nil, err
+		return nil, newDecodeError(err, filename)
 	}
 	inputList := list.New()
 	var currentIndex uint
@@ -76,7 +77,7 @@ func readDocuments(reader io.Reader, filename string, fileIndex int, decoder Dec
 			}
 			return inputList, nil
 		} else if errorReading != nil {
-			return nil, fmt.Errorf("bad file '%v': %w", filename, errorReading)
+			return nil, newDecodeError(errorReading, filename)
 		}
 		candidateNode.document = currentIndex
 		candidateNode.filename = filename

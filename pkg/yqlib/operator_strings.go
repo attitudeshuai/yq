@@ -29,7 +29,10 @@ func encodeToYamlString(node *CandidateNode) (string, error) {
 func evaluate(d *dataTreeNavigator, context Context, expStr string) (string, error) {
 	exp, err := ExpressionParser.ParseExpression(expStr)
 	if err != nil {
-		return "", err
+		// parse failures never reach GetMatchingNodes, so attribute them to the
+		// interpolated document here; evaluation failures below are framed by
+		// the navigator chokepoint.
+		return "", d.attachDocumentError(err, context)
 	}
 	result, err := d.GetMatchingNodes(context, exp)
 	if err != nil {

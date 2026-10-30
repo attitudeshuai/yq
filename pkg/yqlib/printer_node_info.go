@@ -12,12 +12,24 @@ type nodeInfoPrinter struct {
 	printerWriter  PrinterWriter
 	appendixReader io.Reader
 	printedMatches bool
+	multiFileBatch bool
 }
 
 func NewNodeInfoPrinter(printerWriter PrinterWriter) Printer {
 	return &nodeInfoPrinter{
 		printerWriter: printerWriter,
 	}
+}
+
+// SetMultiFileBatch records that the printer is handling a batch of multiple
+// input files, so write errors attributed to the first document render the
+// source filename.
+func (p *nodeInfoPrinter) SetMultiFileBatch(multiFileBatch bool) {
+	p.multiFileBatch = multiFileBatch
+}
+
+func (p *nodeInfoPrinter) withDocumentError(err error, node *CandidateNode) error {
+	return newDocumentErrorForCandidate(err, node, p.multiFileBatch)
 }
 
 func (p *nodeInfoPrinter) SetNulSepOutput(_ bool) {
@@ -37,21 +49,21 @@ func (p *nodeInfoPrinter) PrintResults(matchingNodes *list.List) error {
 		mappedDoc := el.Value.(*CandidateNode)
 		writer, errorWriting := p.printerWriter.GetWriter(mappedDoc)
 		if errorWriting != nil {
-			return errorWriting
+			return p.withDocumentError(errorWriting, mappedDoc)
 		}
 		bytes, err := yaml.Marshal(mappedDoc.ConvertToNodeInfo())
 		if err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 		if _, err := writer.Write(bytes); err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 		if _, err := writer.Write([]byte("\n")); err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 		p.printedMatches = true
 		if err := writer.Flush(); err != nil {
-			return err
+			return p.withDocumentError(err, mappedDoc)
 		}
 	}
 

@@ -39,6 +39,7 @@ func loadWithDecoder(filename string, decoder Decoder) (*CandidateNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer safelyCloseFile(file)
 	reader := bufio.NewReader(file)
 
 	documents, err := readDocuments(reader, filename, 0, decoder)
@@ -85,7 +86,7 @@ func loadStringOperator(d *dataTreeNavigator, context Context, expressionNode *E
 
 		contentsCandidate, err := loadString(filename)
 		if err != nil {
-			return Context{}, fmt.Errorf("failed to load %v: %w", filename, err)
+			return Context{}, newDocumentErrorForCandidate(newLoadError(err, filename), candidate, d.multiFileBatch)
 		}
 
 		results.PushBack(contentsCandidate)
@@ -124,7 +125,7 @@ func loadOperator(d *dataTreeNavigator, context Context, expressionNode *Express
 
 		contentsCandidate, err := loadWithDecoder(filename, loadPrefs.decoder)
 		if err != nil {
-			return Context{}, fmt.Errorf("failed to load %v: %w", filename, err)
+			return Context{}, newDocumentErrorForCandidate(newLoadError(err, filename), candidate, d.multiFileBatch)
 		}
 
 		results.PushBack(contentsCandidate)

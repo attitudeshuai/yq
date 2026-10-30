@@ -3,7 +3,6 @@ package yqlib
 import (
 	"container/list"
 	"errors"
-	"fmt"
 	"io"
 )
 
@@ -47,6 +46,9 @@ func (s *streamEvaluator) EvaluateFiles(expression string, filenames []string, p
 	if err != nil {
 		return err
 	}
+	if navigator, ok := s.treeNavigator.(*dataTreeNavigator); ok {
+		navigator.multiFileBatch = len(filenames) > 1
+	}
 
 	for _, filename := range filenames {
 		reader, cleanup, err := readStream(filename)
@@ -76,7 +78,7 @@ func (s *streamEvaluator) Evaluate(filename string, reader io.Reader, node *Expr
 	var currentIndex uint
 	err := decoder.Init(reader)
 	if err != nil {
-		return 0, err
+		return 0, newDecodeError(err, filename)
 	}
 	for {
 		candidateNode, errorReading := decoder.Decode()
@@ -85,7 +87,7 @@ func (s *streamEvaluator) Evaluate(filename string, reader io.Reader, node *Expr
 			s.fileIndex = s.fileIndex + 1
 			return currentIndex, nil
 		} else if errorReading != nil {
-			return currentIndex, fmt.Errorf("bad file '%v': %w", filename, errorReading)
+			return currentIndex, newDecodeError(errorReading, filename)
 		}
 		candidateNode.document = currentIndex
 		candidateNode.filename = filename

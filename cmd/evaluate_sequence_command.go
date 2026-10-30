@@ -79,13 +79,13 @@ func evaluateSequence(cmd *cobra.Command, args []string) (cmdError error) {
 		writeInPlaceHandler := yqlib.NewWriteInPlaceHandler(args[0])
 		out, err = writeInPlaceHandler.CreateTempFile()
 		if err != nil {
-			return err
+			return yqlib.NewWriteInPlaceError(err, args[0])
 		}
 		// need to indirectly call the function so  that completedSuccessfully is
 		// passed when we finish execution as opposed to now
 		defer func() {
 			if cmdError == nil {
-				cmdError = writeInPlaceHandler.FinishWriteInPlace(completedSuccessfully)
+				cmdError = yqlib.NewWriteInPlaceError(writeInPlaceHandler.FinishWriteInPlace(completedSuccessfully), args[0])
 			}
 		}()
 	}
@@ -139,6 +139,8 @@ func evaluateSequence(cmd *cobra.Command, args []string) (cmdError error) {
 		}
 		defer frontMatterHandler.CleanUp()
 	}
+
+	configureSourceErrorBatch(printer, printerWriter, len(args))
 
 	switch len(args) {
 	case 0:
